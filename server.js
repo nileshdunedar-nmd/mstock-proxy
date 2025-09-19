@@ -119,6 +119,7 @@ app.post("/order", async (req, res) => {
       price: 0
     };
 
+    // 3) Place Order
     r = await fetch(orderUrl, {
       method: "POST",
       headers: {
@@ -128,9 +129,17 @@ app.post("/order", async (req, res) => {
       },
       body: JSON.stringify(orderPayload),
     });
-
-    const orderResponse = await r.json();
+    
+    const raw = await r.text();   // पहले raw text ले लो
+    let orderResponse;
+    try {
+      orderResponse = JSON.parse(raw);
+    } catch (e) {
+      orderResponse = { status: "error", raw: raw };  // अगर JSON नहीं है तो raw लौटा दो
+    }
+    
     return res.status(r.status).json(orderResponse);
+    
 
   } catch (err) {
     return res.status(500).json({ status: "error", message: err.message });
