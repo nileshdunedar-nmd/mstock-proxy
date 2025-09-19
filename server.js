@@ -122,4 +122,3 @@ app.get("/fundsummary", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Proxy listening on port", PORT));
-// Z5NTAI2FIV64XTI2IVBM5STPD4IJICD3
