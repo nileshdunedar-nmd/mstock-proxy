@@ -5,14 +5,13 @@ const bodyParser = require("body-parser");
 const crypto = require("crypto");
 
 const app = express();
-app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
 const API_KEY = process.env.MSTOCK_API_KEY;
 const XMIRAE_VERSION = "1";
 const CLIENT_CODE = process.env.MSTOCK_CLIENT_CODE;
 const PASSWORD = process.env.MSTOCK_PASSWORD;
-const TOTP_SECRET = process.env.TOPT_SECRET; // Base32 secret from Google Authenticator
+const TOTP_SECRET = process.env.TOPT_SECRET;
 
 // === Helper: Base32 decode ===
 function base32toBuffer(base32) {
@@ -21,7 +20,6 @@ function base32toBuffer(base32) {
   let buffer = [];
 
   base32 = base32.replace(/=+$/, "").toUpperCase();
-
   for (let char of base32) {
     const val = alphabet.indexOf(char);
     if (val === -1) throw new Error("Invalid base32 char.");
@@ -56,90 +54,87 @@ function generateTOTP(secret, digits = 6, step = 30) {
   return (code % 10 ** digits).toString().padStart(digits, "0");
 }
 
-// === Login with username/password (first step) ===
-app.post("/login", async (req, res) => {
-  const username = CLIENT_CODE;
-  const password = PASSWORD;
-
-  const url = "https://api.mstock.trade/openapi/typea/connect/login";
-  const params = new URLSearchParams();
-  params.append("username", username);
-  params.append("password", password);
-
+// === Main Order API ===
+app.post("/order", async (req, res) => {
   try {
-    const r = await fetch(url, {
+    const { symbol, quantity, transactionType } = req.body;
+    if (!symbol || !quantity || !transactionType) {
+      return res.status(400).json({ status: "error", message: "symbol, quantity, transactionType required" });
+    }
+
+    // 1) Login
+    const loginUrl = "https://api.mstock.trade/openapi/typea/connect/login";
+    const loginParams = new URLSearchParams();
+    loginParams.append("username", CLIENT_CODE);
+    loginParams.append("password", PASSWORD);
+
+    let r = await fetch(loginUrl, {
       method: "POST",
       headers: {
         "X-Mirae-Version": XMIRAE_VERSION,
         "Content-Type": "application/x-www-form-urlencoded",
         api_key: API_KEY,
       },
-      body: params.toString(),
+      body: loginParams.toString(),
     });
-    const json = await r.json();
-    return res.status(r.status).json(json);
-  } catch (err) {
-    return res
-      .status(500)
-      .json({ status: "error", message: err.message });
-  }
-});
+    const loginData = await r.json();
+    if (loginData.status !== "success") {
+      return res.status(401).json({ status: "error", message: "Login failed", data: loginData });
+    }
 
-// === Verify TOTP directly (auto-generate OTP from server) ===
-app.post("/verify-totp", async (req, res) => {
-  const otp = generateTOTP(TOTP_SECRET);
+    // 2) Verify TOTP
+    const otp = generateTOTP(TOTP_SECRET);
+    const totpUrl = "https://api.mstock.trade/openapi/typea/session/verifytotp";
+    const totpParams = new URLSearchParams();
+    totpParams.append("api_key", API_KEY);
+    totpParams.append("totp", otp);
 
-  const url = "https://api.mstock.trade/openapi/typea/session/verifytotp";
-  const params = new URLSearchParams();
-  params.append("api_key", API_KEY);
-  params.append("totp", otp);
-
-  try {
-    const r = await fetch(url, {
+    r = await fetch(totpUrl, {
       method: "POST",
       headers: {
         "X-Mirae-Version": XMIRAE_VERSION,
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: params.toString(),
+      body: totpParams.toString(),
     });
-    const json = await r.json();
-    return res.status(r.status).json(json);
-  } catch (err) {
-    return res
-      .status(500)
-      .json({ status: "error", message: err.message });
-  }
-});
+    const totpData = await r.json();
+    if (totpData.status !== "success") {
+      return res.status(401).json({ status: "error", message: "TOTP failed", data: totpData });
+    }
 
-// === Fund Summary (needs access_token) ===
-app.get("/fundsummary", async (req, res) => {
-  const access_token = req.query.access_token;
-  if (!access_token) {
-    return res
-      .status(400)
-      .json({ status: "error", message: "access_token query param required" });
-  }
+    const access_token = totpData.data?.access_token;
+    if (!access_token) {
+      return res.status(401).json({ status: "error", message: "No access_token received", data: totpData });
+    }
 
-  const url = "https://api.mstock.trade/openapi/typea/user/fundsummary";
-  try {
-    const r = await fetch(url, {
-      method: "GET",
+    // 3) Place Order
+    const orderUrl = "https://api.mstock.trade/openapi/typea/order/place";
+    const orderPayload = {
+      symbol,
+      quantity,
+      transaction_type: transactionType, // BUY / SELL
+      product: "MIS",                    // MIS/DELIVERY etc.
+      order_type: "MARKET",              // MARKET/LIMIT
+      validity: "DAY"
+    };
+
+    r = await fetch(orderUrl, {
+      method: "POST",
       headers: {
         "X-Mirae-Version": XMIRAE_VERSION,
-        Authorization: `token ${API_KEY}:${access_token}`,
+        "Content-Type": "application/json",
+        "Authorization": `token ${API_KEY}:${access_token}`,
       },
+      body: JSON.stringify(orderPayload),
     });
-    const json = await r.json();
-    return res.status(r.status).json(json);
+
+    const orderResponse = await r.json();
+    return res.status(r.status).json(orderResponse);
+
   } catch (err) {
-    return res
-      .status(500)
-      .json({ status: "error", message: err.message });
+    return res.status(500).json({ status: "error", message: err.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log("Proxy listening on port", PORT)
-);
+app.listen(PORT, () => console.log("Proxy listening on port", PORT));
