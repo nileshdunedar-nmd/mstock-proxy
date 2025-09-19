@@ -113,9 +113,10 @@ app.post("/order", async (req, res) => {
       symbol,
       quantity,
       transaction_type: transactionType, // BUY / SELL
-      product: "MIS",                    // MIS/DELIVERY etc.
+      product: "DELIVERY",                    // MIS/DELIVERY etc.
       order_type: "MARKET",              // MARKET/LIMIT
       validity: "DAY"
+      price: 0
     };
 
     r = await fetch(orderUrl, {
